@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>IMPACT ANALYSIS PLATFORM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={{js_key}}&libraries=services,drawing&autoload=false"></script>
+    <style>
+        body { background-color: #0b0d11; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .sidebar-item { padding: 15px 25px; cursor: pointer; border-left: 4px solid transparent; transition: 0.2s; color: #94a3b8; }
+        .sidebar-item:hover { background: rgba(255,255,255,0.03); color: #f8fafc; }
+        .sidebar-active { background: #1a1d23; color: #3b82f6; border-left-color: #3b82f6; font-weight: bold; }
+        .tab-panel { display: none; height: calc(100vh - 64px); }
+        .panel-active { display: block; }
+        #map, #full-map { width: 100%; height: 100%; border-radius: 15px; border: 1px solid rgba(255,255,255,0.05); }
+        table th, table td { border: 1px solid rgba(255,255,255,0.05); padding: 10px; font-size: 11px; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden">
+    <!-- Sidebar -->
+    <aside class="w-72 bg-[#050608] border-r border-white/5 flex flex-col">
+        <div class="p-8 text-blue-500 font-black text-xl tracking-tighter italic">IMPACT ANALYZER</div>
+        <nav class="flex-1">
+            <div id="m1" onclick="switchPanel('map-panel', this)" class="sidebar-item sidebar-active">● 실시간 분석 지도</div>
+            <div id="m2" onclick="switchPanel('full-analysis-panel', this)" class="sidebar-item">○ 전체 항공 사진 분석 (01~N)</div>
+            <div id="m3" onclick="switchPanel('excel-panel', this)" class="sidebar-item">○ 사업장 리스트 (Excel)</div>
+            <div id="m4" onclick="switchPanel('gallery-panel', this)" class="sidebar-item">○ 상세 증빙 갤러리</div>
+        </nav>
+        <div id="status" class="p-6 text-[10px] text-gray-500 border-t border-white/5 uppercase tracking-widest">System Standby</div>
+    </aside>
+
+    <main class="flex-1 flex flex-col">
+        <!-- Header -->
+        <header class="h-16 border-b border-white/5 flex items-center px-8 justify-between bg-[#050608]/50 backdrop-blur-md">
+            <input id="q" type="text" placeholder="한솔케미칼 전주" 
+                   onkeypress="if(event.key === 'Enter') runSearch()"
+                   class="bg-[#1a1d23] rounded px-4 py-2 text-sm w-96 border-none focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+            <div class="flex gap-2">
+                <button onclick="runSearch()" class="bg-blue-600 px-6 py-2 rounded text-sm font-bold hover:bg-blue-500 transition-all">조사 시작</button>
+                <button id="survey-btn" onclick="runFullInvestigation()" class="bg-indigo-600 px-6 py-2 rounded text-sm font-bold hover:bg-indigo-500 transition-all text-white">전문 상세 조사</button>
+                <button onclick="location.href='/api/export_excel'" class="bg-green-700 px-6 py-2 rounded text-sm font-bold hover:bg-green-600 transition-all text-white">리포트 다운로드</button>
+            </div>
+        </header>
+
+        <!-- View Panels -->
+        <div id="map-panel" class="tab-panel panel-active p-6">
+            <div class="flex gap-4 h-full">
+                <div id="map" class="flex-[3] bg-gray-900 shadow-2xl"></div>
+                <div class="flex-1 bg-[#050608] border border-white/5 rounded-xl p-4 flex flex-col overflow-hidden shadow-inner">
+                    <h3 class="text-blue-400 text-[10px] font-bold mb-4 uppercase tracking-widest bg-white/5 p-2 rounded">Scanned List (1km)</h3>
+                    <div id="side-list" class="flex-1 overflow-y-auto space-y-2 p-1">
+                         <p class="text-gray-600 text-[11px] text-center mt-20 italic">검색어를 입력해 주세요.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="full-analysis-panel" class="tab-panel p-6">
+            <div id="full-map" class="bg-gray-900 shadow-2xl"></div>
+        </div>
+
+        <div id="excel-panel" class="tab-panel p-6 overflow-hidden">
+            <div class="h-full bg-[#050608] border border-white/5 rounded-xl overflow-auto shadow-inner">
+                <table class="w-full text-left bg-[#050608]">
+                    <thead class="bg-[#1a1d23] sticky top-0">
+                        <tr><th class="p-3">순번</th><th class="p-3">상호명</th><th class="p-3">주소</th><th class="p-3">거리(m)</th><th class="p-3">종업원수</th><th class="p-3">생산품</th><th class="p-3">원내여부</th></tr>
+                    </thead>
+                    <tbody id="excel-body" class="divide-y divide-white/5">
+                         <tr><td colspan="7" class="py-20 text-center text-gray-500">데이터가 없습니다.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="gallery-panel" class="tab-panel p-6 overflow-y-auto">
+            <div id="gallery-grid" class="grid grid-cols-4 gap-4 pb-12">
+                 <p class="col-span-4 text-center text-gray-500 mt-20 italic">증빙 자료가 없습니다.</p>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let mainMap, fullMap, factoryData = [], centerInfo = null;
+        let mainCircles = [], fullCircles = [], mainMarkers = [], fullMarkers = [], mainOverlays = [], fullOverlays = [];
+
+        kakao.maps.load(() => {
+            const options = { center: new kakao.maps.LatLng(35.824, 127.147), level: 4 };
+            mainMap = new kakao.maps.Map(document.getElementById('map'), options);
+            fullMap = new kakao.maps.Map(document.getElementById('full-map'), options);
+            mainMap.setMapTypeId(kakao.maps.MapTypeId.HYBRID);
+            fullMap.setMapTypeId(kakao.maps.MapTypeId.HYBRID);
+        });
+
+        function switchPanel(id, btn) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('panel-active'));
+            document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('sidebar-active'));
+            document.getElementById(id).classList.add('panel-active');
+            btn.classList.add('sidebar-active');
+            
+            if(id === 'full-analysis-panel') {
+                fullMap.relayout();
+                drawAnalysisMap(fullMap, fullCircles, fullMarkers, fullOverlays);
+            }
+            if(id === 'map-panel') mainMap.relayout();
+        }
+
+        async function runSearch() {
+            const query = document.getElementById('q').value;
+            if(!query) return;
+
+            document.getElementById('status').innerText = "SEARCHING...";
+            const res = await fetch('/api/search', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({q:query}) });
+            const data = await res.json();
+            if(data.error) return alert(data.error);
+
+            factoryData = data.factories;
+            centerInfo = data.center;
+            
+            clearLayers(mainMap, mainCircles, mainMarkers, mainOverlays);
+            clearLayers(fullMap, fullCircles, fullMarkers, fullOverlays);
+            
+            drawAnalysisMap(mainMap, mainCircles, mainMarkers, mainOverlays);
+            drawAnalysisMap(fullMap, fullCircles, fullMarkers, fullOverlays);
+            
+            document.getElementById('status').innerText = "SCAN COMPLETE - READY FOR FULL INVESTIGATION";
+            updateUI();
+        }
+
+        function clearLayers(targetMap, circles, markers, overlays) {
+            circles.forEach(c => c.setMap(null));
+            markers.forEach(m => m.setMap(null));
+            overlays.forEach(o => o.setMap(null));
+            circles.length = 0; markers.length = 0; overlays.length = 0;
+        }
+
+        function drawAnalysisMap(targetMap, circles, markers, overlays) {
+            if (!centerInfo || factoryData.length === 0) return;
+
+            targetMap.relayout();
+            const cp = new kakao.maps.LatLng(centerInfo.lat, centerInfo.lng);
+            targetMap.setCenter(cp);
+            
+            const circle = new kakao.maps.Circle({
+                center: cp, radius: 1000, strokeWeight: 2, strokeColor: '#3b82f6', strokeOpacity: 0.8, fillOpacity: 0.1, fillColor: '#3b82f6'
+            });
+            circle.setMap(targetMap);
+            circles.push(circle);
+
+            // 거리순으로 정렬되어 있으므로, 0번에 가장 가까운 공장을 주인공 후보로 선정
+            const minDist = Math.min(...factoryData.map(f => f.dist));
+            let neighborIdx = 1;
+
+            factoryData.forEach((f) => {
+                const pos = new kakao.maps.LatLng(f.lat, f.lng);
+                // 이름이 포함되거나, 거리가 0에 아주 가까운(최저 거리) 경우 중심 업체로 판정
+                const isCenter = f.name.includes(centerInfo.name) || f.dist === minDist;
+
+                let content = "";
+                if (isCenter) {
+                    // 중심 공장: 파란색 점(14px) + 상단 이름표(14px) - 확실하게 크게!
+                    content = `
+                        <div style="display:flex; flex-direction:column; align-items:center; transform: translateY(-7px);">
+                            <div style="padding:4px 12px; background:rgba(30,58,138,0.9); color:#fff; border-radius:6px; font-weight:bold; font-size:14px; border:2px solid #3b82f6; margin-bottom:6px; white-space:nowrap; box-shadow:0 4px 8px rgba(0,0,0,0.6);">
+                                ${f.name}
+                            </div>
+                            <div style="width:14px; height:14px; background:#3b82f6; border-radius:50%; border:3px solid #fff; box-shadow:0 0 10px rgba(59,130,246,1);"></div>
+                        </div>`;
+                } else if (f.dist <= 1000) {
+                    // 주변 공장: 주황색 점(10px) + 상단 숫자(12px) - 시원시원하게!
+                    const num = (neighborIdx++).toString();
+                    content = `
+                        <div style="display:flex; flex-direction:column; align-items:center; transform: translateY(-5px);">
+                            <div style="color:#fff; font-size:12px; font-weight:900; text-shadow:2px 2px 3px #000, -2px -2px 3px #000; margin-bottom:4px;">
+                                ${num}
+                            </div>
+                            <div style="width:10px; height:10px; background:#f97316; border-radius:50%; border:2px solid #fff; box-shadow:0 0 6px rgba(249,115,22,1);"></div>
+                        </div>`;
+                }
+
+                if (content) {
+                    const overlay = new kakao.maps.CustomOverlay({ position: pos, content: content, yAnchor: 1 });
+                    overlay.setMap(targetMap);
+                    overlays.push(overlay);
+                }
+            });
+        }
+
+        async function runFullInvestigation() {
+            document.getElementById('status').innerText = "ILIS 접속 및 상세 증빙 캡처 중... (잠시만 기다려주세요)";
+            
+            const res = await fetch('/api/full_investigation', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({q: document.getElementById('q').value})
+            });
+            const result = await res.json();
+            
+            if (result.status === 'success') {
+                document.getElementById('status').innerText = "FULL INVESTIGATION COMPLETE";
+                alert("모든 업체의 상세 스크린샷이 저장되었습니다.");
+                factoryData = result.data;
+                updateUI();
+            }
+        }
+
+        function updateUI() {
+            const sideList = document.getElementById('side-list');
+            const excelBody = document.getElementById('excel-body');
+            const galleryGrid = document.getElementById('gallery-grid');
+            
+            sideList.innerHTML = ""; excelBody.innerHTML = ""; galleryGrid.innerHTML = "";
+
+            let neighborIdx = 1;
+            factoryData.forEach((f) => {
+                const isCenter = f.name.includes(centerInfo.name);
+                const isWithin = f.dist <= 1000;
+                const num = isCenter ? "CTR" : (neighborIdx++).toString().padStart(2, '0');
+
+                if(isWithin) {
+                    sideList.innerHTML += `<div class="p-3 ${isCenter ? 'bg-yellow-900/20 border-yellow-500/30' : 'bg-[#1a1d23] border-white/5'} rounded text-[11px] border flex justify-between">
+                        <span><b class="${isCenter ? 'text-yellow-400' : 'text-blue-400'} mr-2">${num}</b> ${f.name}</span>
+                    </div>`;
+                }
+                
+                excelBody.innerHTML += `<tr class="hover:bg-white/5 transition-colors">
+                    <td class="p-3">${num}</td><td class="p-3 font-bold ${isCenter ? 'text-yellow-400' : 'text-gray-200'}">${f.name}</td><td class="p-3 text-gray-400">${f.addr}</td>
+                    <td class="p-3 text-blue-400 font-mono">${f.dist.toLocaleString()}m</td><td class="p-3 text-gray-300 font-bold">${f.worker || '-'}</td>
+                    <td class="p-3">${f.product || '-'}</td><td class="p-3 ${isWithin ? 'text-green-400':'text-red-400'}">${f.in_out || '-'}</td>
+                </tr>`;
+                
+                if(f.img_url) {
+                    galleryGrid.innerHTML += `
+                        <div class="bg-[#1a1d23] p-4 rounded-xl border border-white/5 hover:border-blue-500/20 transition-all group shadow-lg">
+                            <img src="${f.img_url}" class="w-full h-40 object-cover rounded mb-3 border border-white/10">
+                            <div class="text-xs font-bold ${f.name.includes('Report') ? 'text-yellow-400' : 'text-blue-400'} mb-1 tracking-tight">${num}. ${f.name}</div>
+                            <div class="text-[9px] text-gray-500">산업입지정보 상세증빙</div>
+                        </div>`;
+                }
+            });
+
+            if(!galleryGrid.innerHTML) galleryGrid.innerHTML = '<p class="col-span-4 text-center text-gray-500 mt-20 italic">증빙 자료가 확보되지 않았습니다.</p>';
+        }
+    </script>
+</body>
+</html>

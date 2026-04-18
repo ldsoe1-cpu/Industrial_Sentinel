@@ -1,0 +1,9 @@
+flask
+playwright
+shapely
+pandas
+pyproj
+requests
+python-dotenv
+openpyxl
+xlsxwriter

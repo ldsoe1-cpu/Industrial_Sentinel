@@ -1,0 +1,10 @@
+# Industrial Sentinel Gitignore
+.env
+__pycache__/
+*.xlsx
+static/evidence/*.png
+static/evidence/*.jpg
+node_modules/
+.DS_Store
+venv/
+*.pyc
